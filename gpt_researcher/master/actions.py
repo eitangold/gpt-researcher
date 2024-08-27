@@ -10,6 +10,8 @@ from gpt_researcher.master.prompts import *
 from gpt_researcher.scraper.scraper import Scraper
 from gpt_researcher.utils.enum import Tone
 from gpt_researcher.utils.llm import *
+from openinference.semconv.trace import SpanAttributes, OpenInferenceSpanKindValues
+from opentelemetry import trace
 
 
 def get_retriever(retriever):
@@ -117,7 +119,7 @@ def get_default_retriever(retriever):
 
 
 async def choose_agent(
-    query, cfg, parent_query=None, cost_callback: callable = None, headers=None
+    query, cfg, parent_query=None, cost_callback: callable = None, headers=None,
 ):
     """
     Chooses the agent automatically

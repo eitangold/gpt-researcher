@@ -1,7 +1,7 @@
 import asyncio
 
 from fastapi import WebSocket
-
+from opentelemetry import trace
 from gpt_researcher.master.actions import (
     add_source_urls,
     extract_headers,
@@ -58,8 +58,8 @@ class DetailedReport:
             self.global_urls = set(self.source_urls)
 
     async def run(self):
-
         # Conduct initial research using the main assistant
+
         await self._initial_research()
 
         # Get list of all subtopics

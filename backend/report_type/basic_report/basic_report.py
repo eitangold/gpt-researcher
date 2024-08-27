@@ -24,7 +24,7 @@ class BasicReport:
         self.websocket = websocket
         self.headers = headers or {}
 
-    async def run(self):
+    async def run(self,tracer):
         # Initialize researcher
         researcher = GPTResearcher(
             query=self.query,
@@ -34,13 +34,15 @@ class BasicReport:
             tone=self.tone,
             config_path=self.config_path,
             websocket=self.websocket,
-            headers=self.headers
+            headers=self.headers,
+            tracer=tracer
         )
 
         # Run research
         await researcher.conduct_research()
 
         # and generate report
+      
         report = await researcher.write_report()
 
         return report

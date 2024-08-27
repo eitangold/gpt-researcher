@@ -1,22 +1,25 @@
 import asyncio
 import datetime
 from typing import Dict, List
+from openinference.semconv.trace import SpanAttributes
 
 from fastapi import WebSocket
-
+from opentelemetry import trace
+from openinference.semconv.trace import SpanAttributes, OpenInferenceSpanKindValues
 from backend.report_type import BasicReport, DetailedReport
 from gpt_researcher.utils.enum import ReportType, Tone
 from multi_agents.main import run_research_task
 from gpt_researcher.master.actions import stream_output  # Import stream_output
-
+from openinference.instrumentation import using_attributes
+from opentelemetry.trace import SpanKind
 class WebSocketManager:
     """Manage websockets"""
-
-    def __init__(self):
+    def __init__(self,tracer):
         """Initialize the WebSocketManager class."""
         self.active_connections: List[WebSocket] = []
         self.sender_tasks: Dict[WebSocket, asyncio.Task] = {}
         self.message_queues: Dict[WebSocket, asyncio.Queue] = {}
+        self.tracer = tracer
 
     async def start_sender(self, websocket: WebSocket):
         """Start the sender task."""
@@ -53,15 +56,17 @@ class WebSocketManager:
             del self.sender_tasks[websocket]
             del self.message_queues[websocket]
 
-
     async def start_streaming(self, task, report_type, report_source, source_urls, tone, websocket, headers=None):
         """Start streaming the output."""
         tone = Tone[tone]
-        report = await run_agent(task, report_type, report_source, source_urls, tone, websocket, headers)
+        with self.tracer.start_as_current_span(name="Entry Point") as span:
+            span.set_attribute(SpanAttributes.OPENINFERENCE_SPAN_KIND,OpenInferenceSpanKindValues.AGENT.value)
+            span.set_attribute(SpanAttributes.INPUT_VALUE,f"The Task That the agent need to conduct reserach on: {task}")\
+            # Run the agent
+            report = await run_agent(task, report_type, report_source, source_urls, tone, websocket, headers,self.tracer)
         return report
 
-
-async def run_agent(task, report_type, report_source, source_urls, tone: Tone, websocket, headers=None):
+async def run_agent(task, report_type, report_source, source_urls, tone: Tone, websocket, headers=None,tracer=None):
     """Run the agent."""
     # measure time
     start_time = datetime.datetime.now()
@@ -82,6 +87,7 @@ async def run_agent(task, report_type, report_source, source_urls, tone: Tone, w
             websocket=websocket,
             headers=headers
         )
+
         report = await researcher.run()
     else:
         researcher = BasicReport(
@@ -94,7 +100,7 @@ async def run_agent(task, report_type, report_source, source_urls, tone: Tone, w
             websocket=websocket,
             headers=headers
         )
-        report = await researcher.run()
+        report = await researcher.run(tracer=tracer)
 
     # measure time
     end_time = datetime.datetime.now()

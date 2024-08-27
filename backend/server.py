@@ -17,6 +17,42 @@ import shutil
 from multi_agents.main import run_research_task
 from gpt_researcher.document.document import DocumentLoader
 from gpt_researcher.master.actions import stream_output
+# from dotenv import load_dotenv
+
+# load_dotenv()
+from openinference.instrumentation.langchain import LangChainInstrumentor
+# from opentelemetry import trace as trace_api
+# from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+# from opentelemetry.sdk import trace as trace_sdk
+# from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+# from openinference.instrumentation import using_attributes
+
+# tracer_provider = trace_sdk.TracerProvider()
+# span_exporter = OTLPSpanExporter("http://localhost:6006/v1/traces")
+# span_processor = SimpleSpanProcessor(span_exporter)
+# tracer_provider.add_span_processor(span_processor)
+# trace_api.set_tracer_provider(tracer_provider)
+# TRACER = trace_api.get_tracer(__name__)
+# LangChainInstrumentor().instrument()
+from openinference.semconv.resource import ResourceAttributes
+from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from phoenix.config import get_env_host, get_env_port
+
+resource = Resource(attributes={
+    ResourceAttributes.PROJECT_NAME: 'default'
+})
+tracer_provider = TracerProvider(resource=resource)
+trace.set_tracer_provider(tracer_provider)
+tracer = trace.get_tracer(__name__)
+collector_endpoint = f"http://localhost:6006/v1/traces"
+span_exporter = OTLPSpanExporter(endpoint=collector_endpoint)
+simple_span_processor = SimpleSpanProcessor(span_exporter=span_exporter)
+trace.get_tracer_provider().add_span_processor(simple_span_processor)
+LangChainInstrumentor().instrument()
 
 
 class ResearchRequest(BaseModel):
@@ -46,7 +82,7 @@ app.mount("/static", StaticFiles(directory="./frontend/static"), name="static")
 
 templates = Jinja2Templates(directory="./frontend")
 
-manager = WebSocketManager()
+manager = WebSocketManager(tracer)
 
 # Dynamic directory for outputs once first research is run
 @app.on_event("startup")

@@ -10,6 +10,8 @@ from gpt_researcher.document import DocumentLoader, LangChainDocumentLoader
 from gpt_researcher.master.actions import *
 from gpt_researcher.memory import Memory
 from gpt_researcher.utils.enum import ReportSource, ReportType, Tone
+from openinference.instrumentation import using_attributes
+from openinference.semconv.trace import SpanAttributes, OpenInferenceSpanKindValues
 
 
 class GPTResearcher:
@@ -35,6 +37,7 @@ class GPTResearcher:
         verbose: bool = True,
         context=[],
         headers: dict = None,  # Add headers parameter
+        tracer=None,
     ):
         """
         Initialize the GPT Researcher class.
@@ -80,6 +83,8 @@ class GPTResearcher:
         else:
             self.tone = tone
 
+        self.tracer = tracer
+
         # Only relevant for DETAILED REPORTS
         # --------------------------------------
 
@@ -93,129 +98,137 @@ class GPTResearcher:
         """
         Runs the GPT Researcher to conduct research
         """
-        # Reset visited_urls and source_urls at the start of each research task
-        self.visited_urls.clear()
-        if self.report_source != ReportSource.Sources.value:
-            self.source_urls = []
+        with self.tracer.start_as_current_span("Conducting Research") as span:
+            span.set_attribute(SpanAttributes.OPENINFERENCE_SPAN_KIND,OpenInferenceSpanKindValues.CHAIN.value)
 
-        if self.verbose:
-            await stream_output(
-                "logs",
-                "starting_research",
-                f"🔎 Starting the research task for '{self.query}'...",
-                self.websocket,
-            )
+            # Reset visited_urls and source_urls at the start of each research task
+            self.visited_urls.clear()
+            if self.report_source != ReportSource.Sources.value:
+                self.source_urls = []
 
-        # Generate Agent
-        if not (self.agent and self.role):
-            self.agent, self.role = await choose_agent(
-                query=self.query,
-                cfg=self.cfg,
-                parent_query=self.parent_query,
-                cost_callback=self.add_costs,
-                headers=self.headers,
-            )
+            if self.verbose:
+                await stream_output(
+                    "logs",
+                    "starting_research",
+                    f"🔎 Starting the research task for '{self.query}'...",
+                    self.websocket,
+                )
 
-        if self.verbose:
-            await stream_output("logs", "agent_generated", self.agent, self.websocket)
+            # Generate Agent
+            with self.tracer.start_as_current_span("Choosing Agent Role") as child_span:
+                child_span.set_attribute(SpanAttributes.OPENINFERENCE_SPAN_KIND,OpenInferenceSpanKindValues.LLM.value)
+                child_span.set_attribute(SpanAttributes.TAG_TAGS,str(['hallucination']))
+                if not (self.agent and self.role):
+                    self.agent, self.role = await choose_agent(
+                        query=self.query,
+                        cfg=self.cfg,
+                        parent_query=self.parent_query,
+                        cost_callback=self.add_costs,
+                        headers=self.headers,
+                    )
 
-        # If specified, the researcher will use the given urls as the context for the research.
-        if self.source_urls:
-            self.context = await self.__get_context_by_urls(self.source_urls)
+            if self.verbose:
+                await stream_output("logs", "agent_generated", self.agent, self.websocket)
 
-        elif self.report_source == ReportSource.Local.value:
-            document_data = await DocumentLoader(self.cfg.doc_path).load()
-            self.context = await self.__get_context_by_search(self.query, document_data)
+            # If specified, the researcher will use the given urls as the context for the research.
+            if self.source_urls:
+                self.context = await self.__get_context_by_urls(self.source_urls)
 
-        # Hybrid search including both local documents and web sources
-        elif self.report_source == ReportSource.Hybrid.value:
-            document_data = await DocumentLoader(self.cfg.doc_path).load()
-            docs_context = await self.__get_context_by_search(self.query, document_data)
-            web_context = await self.__get_context_by_search(self.query)
-            self.context = f"Context from local documents: {docs_context}\n\nContext from web sources: {web_context}"
+            elif self.report_source == ReportSource.Local.value:
+                document_data = await DocumentLoader(self.cfg.doc_path).load()
+                self.context = await self.__get_context_by_search(self.query, document_data)
 
-        elif self.report_source == ReportSource.LangChainDocuments.value:
-            langchain_documents_data = await LangChainDocumentLoader(
-                self.documents
-            ).load()
-            self.context = await self.__get_context_by_search(
-                self.query, langchain_documents_data
-            )
+            # Hybrid search including both local documents and web sources
+            elif self.report_source == ReportSource.Hybrid.value:
+                document_data = await DocumentLoader(self.cfg.doc_path).load()
+                docs_context = await self.__get_context_by_search(self.query, document_data)
+                web_context = await self.__get_context_by_search(self.query)
+                self.context = f"Context from local documents: {docs_context}\n\nContext from web sources: {web_context}"
 
-        # Default web based research
-        else:
-            self.context = await self.__get_context_by_search(self.query)
+            elif self.report_source == ReportSource.LangChainDocuments.value:
+                langchain_documents_data = await LangChainDocumentLoader(
+                    self.documents
+                ).load()
+                self.context = await self.__get_context_by_search(
+                    self.query, langchain_documents_data
+                )
 
-        time.sleep(2)
-        if self.verbose:
-            await stream_output(
-                "logs",
-                "research_step_finalized",
-                f"Finalized research step.\n💸 Total Research Costs: ${self.get_costs()}",
-                self.websocket,
-            )
+            # Default web based research
+            else:
+                self.context = await self.__get_context_by_search(self.query)
 
-        return self.context
+            time.sleep(2)
+            if self.verbose:
+                await stream_output(
+                    "logs",
+                    "research_step_finalized",
+                    f"Finalized research step.\n💸 Total Research Costs: ${self.get_costs()}",
+                    self.websocket,
+                )
+
+            return self.context
 
     async def write_report(self, existing_headers: list = [], relevant_written_contents: list = []):
-        """
-        Writes the report based on research conducted
+        with self.tracer.start_as_current_span("Write Report") as span:
+            span.set_attribute(SpanAttributes.OPENINFERENCE_SPAN_KIND,OpenInferenceSpanKindValues.LLM.value)
+            """
+            Writes the report based on research conducted
 
-        Returns:
-            str: The report
-        """
-        report = ""
+            Returns:
+                str: The report
+            """
+            report = ""
 
-        if self.verbose:
-            await stream_output(
-                "logs",
-                "task_summary_coming_up",
-                f"✍️ Writing summary for research task: {self.query} (this may take a few minutes)...",
-                self.websocket,
-            )
+            if self.verbose:
+                await stream_output(
+                    "logs",
+                    "task_summary_coming_up",
+                    f"✍️ Writing summary for research task: {self.query} (this may take a few minutes)...",
+                    self.websocket,
+                )
 
-        if self.report_type == "custom_report":
-            self.role = self.cfg.agent_role if self.cfg.agent_role else self.role
-            report = await generate_report(
-                query=self.query,
-                context=self.context,
-                agent_role_prompt=self.role,
-                report_type=self.report_type,
-                report_source=self.report_source,
-                tone=self.tone,
-                websocket=self.websocket,
-                cfg=self.cfg,
-                headers=self.headers,
-            )
-        elif self.report_type == "subtopic_report":
-            report = await generate_report(
-                query=self.query,
-                context=self.context,
-                agent_role_prompt=self.role,
-                report_type=self.report_type,
-                report_source=self.report_source,
-                websocket=self.websocket,
-                tone=self.tone,
-                cfg=self.cfg,
-                main_topic=self.parent_query,
-                existing_headers=existing_headers,
-                relevant_written_contents=relevant_written_contents,
-                cost_callback=self.add_costs,
-                headers=self.headers,
-            )
-        else:
-            report = await generate_report(
-                query=self.query,
-                context=self.context,
-                agent_role_prompt=self.role,
-                report_type=self.report_type,
-                report_source=self.report_source,
-                tone=self.tone,
-                websocket=self.websocket,
-                cfg=self.cfg,
-                cost_callback=self.add_costs,
-                headers=self.headers,
-            )
+            if self.report_type == "custom_report":
+                self.role = self.cfg.agent_role if self.cfg.agent_role else self.role
+                report = await generate_report(
+                    query=self.query,
+                    context=self.context,
+                    agent_role_prompt=self.role,
+                    report_type=self.report_type,
+                    report_source=self.report_source,
+                    tone=self.tone,
+                    websocket=self.websocket,
+                    cfg=self.cfg,
+                    headers=self.headers,
+                )
+            elif self.report_type == "subtopic_report":
+                report = await generate_report(
+                    query=self.query,
+                    context=self.context,
+                    agent_role_prompt=self.role,
+                    report_type=self.report_type,
+                    report_source=self.report_source,
+                    websocket=self.websocket,
+                    tone=self.tone,
+                    cfg=self.cfg,
+                    main_topic=self.parent_query,
+                    existing_headers=existing_headers,
+                    relevant_written_contents=relevant_written_contents,
+                    cost_callback=self.add_costs,
+                    headers=self.headers,
+                )
+            else:
+                report = await generate_report(
+                    query=self.query,
+                    context=self.context,
+                    agent_role_prompt=self.role,
+                    report_type=self.report_type,
+                    report_source=self.report_source,
+                    tone=self.tone,
+                    websocket=self.websocket,
+                    cfg=self.cfg,
+                    cost_callback=self.add_costs,
+                    headers=self.headers,
+                )
 
         return report
 
@@ -243,37 +256,41 @@ class GPTResearcher:
         """
         context = []
         # Generate Sub-Queries including original query
-        sub_queries = await get_sub_queries(
-            query=query,
-            agent_role_prompt=self.role,
-            cfg=self.cfg,
-            parent_query=self.parent_query,
-            report_type=self.report_type,
-            cost_callback=self.add_costs,
-            openai_api_key=self.headers.get("openai_api_key"),
-        )
-
-        # If this is not part of a sub researcher, add original query to research for better results
-        if self.report_type != "subtopic_report":
-            sub_queries.append(query)
-
-        if self.verbose:
-            await stream_output(
-                "logs",
-                "subqueries",
-                f"🗂️ I will conduct my research based on the following queries: {sub_queries}...",
-                self.websocket,
-                True,
-                sub_queries,
+        with self.tracer.start_as_current_span("Generating Sub Questions") as span:
+            span.set_attribute(SpanAttributes.OPENINFERENCE_SPAN_KIND,OpenInferenceSpanKindValues.LLM.value)
+            sub_queries = await get_sub_queries(
+                query=query,
+                agent_role_prompt=self.role,
+                cfg=self.cfg,
+                parent_query=self.parent_query,
+                report_type=self.report_type,
+                cost_callback=self.add_costs,
+                openai_api_key=self.headers.get("openai_api_key"),
             )
 
-        # Using asyncio.gather to process the sub_queries asynchronously
-        context = await asyncio.gather(
-            *[
-                self.__process_sub_query(sub_query, scraped_data)
-                for sub_query in sub_queries
-            ]
-        )
+            # If this is not part of a sub researcher, add original query to research for better results
+            if self.report_type != "subtopic_report":
+                sub_queries.append(query)
+
+            if self.verbose:
+                await stream_output(
+                    "logs",
+                    "subqueries",
+                    f"🗂️ I will conduct my research based on the following queries: {sub_queries}...",
+                    self.websocket,
+                    True,
+                    sub_queries,
+                )
+
+            # Using asyncio.gather to process the sub_queries asynchronously
+        with self.tracer.start_as_current_span("Retriving Data") as span:
+            span.set_attribute(SpanAttributes.OPENINFERENCE_SPAN_KIND,OpenInferenceSpanKindValues.RETRIEVER.value)
+            context = await asyncio.gather(
+                *[
+                    self.__process_sub_query(sub_query, scraped_data)
+                    for sub_query in sub_queries
+                ]
+            )
         return context
 
     async def __process_sub_query(self, sub_query: str, scraped_data: list = []):
