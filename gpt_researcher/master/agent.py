@@ -1,6 +1,7 @@
 import asyncio
 import random
 import time
+import asyncio
 
 from typing import Set
 
@@ -12,8 +13,8 @@ from gpt_researcher.memory import Memory
 from gpt_researcher.utils.enum import ReportSource, ReportType, Tone
 from openinference.instrumentation import using_attributes
 from openinference.semconv.trace import SpanAttributes, OpenInferenceSpanKindValues
-
-
+from LLMAsJudge.judge import (LLMJudge,GoogleGemenai)
+from LLMAsJudge.Metric import MetricsName
 class GPTResearcher:
     """
     GPT Researcher
@@ -93,6 +94,8 @@ class GPTResearcher:
 
         # Stores all the user provided subtopics
         self.subtopics = subtopics
+        self.judge = LLMJudge()
+        
 
     async def conduct_research(self):
         """
@@ -117,7 +120,6 @@ class GPTResearcher:
             # Generate Agent
             with self.tracer.start_as_current_span("Choosing Agent Role") as child_span:
                 child_span.set_attribute(SpanAttributes.OPENINFERENCE_SPAN_KIND,OpenInferenceSpanKindValues.LLM.value)
-                child_span.set_attribute(SpanAttributes.TAG_TAGS,str(['hallucination']))
                 if not (self.agent and self.role):
                     self.agent, self.role = await choose_agent(
                         query=self.query,
@@ -126,6 +128,16 @@ class GPTResearcher:
                         cost_callback=self.add_costs,
                         headers=self.headers,
                     )
+                # async with asyncio.TaskGroup() as tg:
+                loop = asyncio.get_running_loop()
+                relevance_score = loop.create_task(self.judge.answer_relevancy(self.query,self.role))
+                bias_score = loop.create_task(self.judge.answer_bias(self.query,self.role))
+                results = await asyncio.gather(relevance_score,bias_score)
+                relevancy = [scorer for scorer in results if scorer['type'] == 'relevancy']
+                bias = [scorer for scorer in results if scorer['type'] == 'bias']
+                child_span.set_attribute(MetricsName.RELEVENCE_SCORE,str(relevancy))
+                child_span.set_attribute(MetricsName.BIAS_SCORE,str(bias))
+
 
             if self.verbose:
                 await stream_output("logs", "agent_generated", self.agent, self.websocket)
