@@ -13,11 +13,23 @@ from google.generativeai.types.safety_types import (HarmBlockThreshold,
                                                     )
 from deepeval.models.base_model import DeepEvalBaseLLM
 import asyncio
-class OpenAiDeepEval(ChatOpenAI):
-    def __init__(self,**kwargs):
-        super().__init__(**kwargs)
+class OpenAiDeepEval(DeepEvalBaseLLM):
+    def __init__(self,model):
+        self.model = model
+        # self.model = self.model
     def get_model_name(self):
-        return self.model_name
+        return self.model.model_name
+    def load_model(self):
+        return self.model
+    def generate(self, prompt: str) -> str:
+        chat_model = self.model
+        return chat_model.invoke(prompt).content
+    async def a_generate(self, prompt: str) -> str:
+        chat_model = self.model
+        res = await chat_model.ainvoke(prompt)
+        return res.content
+
+
 
 class GoogleGemenai(DeepEvalBaseLLM):
     """Class to implement Vertex AI for DeepEval"""
@@ -57,9 +69,10 @@ class GoogleGemenai(DeepEvalBaseLLM):
     
 class LLMJudge:
     def __init__(self):
-        self.llm = OpenAiDeepEval(model=os.environ.get('OPENAI_LLM_JUDGE_MODEL','gpt-4o-mini'),
-                              temperature=0,
-                              api_key=os.environ.get('OPENAI_API_KEY'))  # Default LLM, can be changed later
+        self.default_model = ChatOpenAI(model=os.environ.get('OPENAI_LLM_JUDGE_MODEL','gpt-4o-mini'),
+                            temperature=0,
+                            api_key=os.environ.get('OPENAI_API_KEY'))
+        self.llm = OpenAiDeepEval(self.default_model)  # Default LLM, can be changed later
         self.prompts_path = {}
 
     def set_llm(self, new_llm):
@@ -72,7 +85,7 @@ class LLMJudge:
         #TODO need to check the async_mode to true and get response async
         """
         metric =  AnswerRelevancyMetric(threshold=0.7,
-                                            model=self.llm.get_model_name(),
+                                            model=self.llm,
                                             include_reason=True,
                                             async_mode=True,
                                         )
@@ -92,7 +105,7 @@ class LLMJudge:
         #TODO need to check the async_mode to true and get response async
         """
         metric =  BiasMetric(threshold=0.7,
-                                            model=self.llm.get_model_name(),
+                                            model=self.llm,
                                             include_reason=True,
                                             async_mode=True,
                                         )

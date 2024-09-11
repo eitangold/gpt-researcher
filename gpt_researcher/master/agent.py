@@ -94,8 +94,9 @@ class GPTResearcher:
 
         # Stores all the user provided subtopics
         self.subtopics = subtopics
-        self.judge = LLMJudge()
-        
+        self.open_ai_judge = LLMJudge()
+        self.gemeni_judge = LLMJudge()
+        self.gemeni_judge.set_llm(GoogleGemenai(GoogleGemenai.make_model()))
 
     async def conduct_research(self):
         """
@@ -130,8 +131,8 @@ class GPTResearcher:
                     )
                 # async with asyncio.TaskGroup() as tg:
                 loop = asyncio.get_running_loop()
-                relevance_score = loop.create_task(self.judge.answer_relevancy(self.query,self.role))
-                bias_score = loop.create_task(self.judge.answer_bias(self.query,self.role))
+                relevance_score = loop.create_task(self.gemeni_judge.answer_relevancy(self.query,self.role))
+                bias_score = loop.create_task(self.gemeni_judge.answer_bias(self.query,self.role))
                 results = await asyncio.gather(relevance_score,bias_score)
                 relevancy = [scorer for scorer in results if scorer['type'] == 'relevancy']
                 bias = [scorer for scorer in results if scorer['type'] == 'bias']
